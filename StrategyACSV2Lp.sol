@@ -1,5 +1,5 @@
 /**
- *Submitted for verification at BscScan.com on 2021-03-03
+ *Submitted for verification at BscScan.com on 2021-03-18
 */
 
 // SPDX-License-Identifier: MIT
@@ -1456,18 +1456,26 @@ abstract contract StrategyBase is IStrategy {
     }
 }
 
-interface IACryptoSFarm {
-    function deposit(uint256 _poolId, uint256 _amount) external;
+interface IACryptoSFarmV2 {
+    function deposit(address _lpToken, uint256 _amount) external;
 
-    function withdraw(uint256 _poolId, uint256 _amount) external;
+    function withdraw(address _lpToken, uint256 _amount) external;
 
-    function emergencyWithdraw(uint256 _pid) external;
+    function userInfo(address _lpToken, address _user)
+        external
+        view
+        returns (
+            uint256 amount,
+            uint256 weight,
+            uint256 rewardDebt,
+            uint256 rewardCredit
+        );
 
-    function userInfo(uint256 _pid, address _user) external view returns (uint256 amount, uint256 rewardDebt);
+    function pendingSushi(address _lpToken, address _user) external view returns (uint256);
 
-    function pendingSushi(uint256 _pid, address _user) external view returns (uint256);
+    function harvest(address _lpToken) external;
 
-    function withdrawalFee() external view returns (uint256);
+    function harvestFee() external view returns (uint256);
 }
 
 interface IACryptoSVault {
@@ -1495,19 +1503,16 @@ interface IACryptoSVault {
  Where possible, strategies must remain as immutable as possible, instead of updating variables, we update the contract by linking it in the controller
 
 */
-contract StrategyACSLp is StrategyBase {
+contract StrategyACSV2Lp is StrategyBase {
     uint256 public blocksToReleaseCompound = 0; // disable
 
-    address public acsVault = 0x532d5775cE71Cb967B78acbc290f80DF80A9bAa5;
-    address public acsFarm = 0xeaE1425d8ed46554BF56968960e2E567B49D0BED;
-    uint256 public poolFarmId;
+    address public acsVault = 0x03E904a729A6E0eB4B675969D3fe51b5392f5C39;
+    address public acsFarm = 0xb1fa5d3c0111d8E9ac43A19ef17b281D5D4b474E;
 
     address public token0 = 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82;
     address public token1 = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
-    uint256 public farmLimit = 10**18 * 10; //if vault token reach this limit (deposit farm rate to acsFarm)
-    uint256 public farmRate = 9000; // base 10000
-    uint256 public rateToClaimReward = 10; // reward / withdrawFee
+    uint256 public rateToClaimReward = 10000; // reward * 1000 / withdrawFee
 
     // baseToken       = 0xA527a61703D82139F8a06Bc30097cC9CAA2df5A6 (CAKEBNB-CAKELP)
     // farmingToken = 0x0391d2021f89dc339f60fff84546ea23e337750f (ASC)
@@ -1519,7 +1524,6 @@ contract StrategyACSLp is StrategyBase {
         address _farmingToken,
         address _acsVault,
         address _acsFarm,
-        uint256 _pooFarmlId,
         address _targetCompound,
         address _token0,
         address _token1,
@@ -1529,7 +1533,6 @@ contract StrategyACSLp is StrategyBase {
         initialize(_baseToken, _farmingToken, _controller, _targetCompound);
         acsVault = _acsVault;
         acsFarm = _acsFarm;
-        poolFarmId = _pooFarmlId;
         token0 = _token0;
         token1 = _token1;
 
@@ -1548,7 +1551,7 @@ contract StrategyACSLp is StrategyBase {
     }
 
     function getName() public pure override returns (string memory) {
-        return "StrategyACSLp";
+        return "StrategyACSV2Lp";
     }
 
     function deposit() public override {
@@ -1559,18 +1562,15 @@ contract StrategyACSLp is StrategyBase {
             emit Deposit(baseToken, _baseBal);
         }
         _baseBal = IERC20(_acsVault).balanceOf(address(this));
-        if (_baseBal > farmLimit) {
-            uint256 _depositBal = _baseBal.mul(farmRate).div(10000);
-            IACryptoSFarm(acsFarm).deposit(poolFarmId, _depositBal);
-            emit Deposit(_acsVault, _depositBal);
-        }
+        IACryptoSFarmV2(acsFarm).deposit(_acsVault, _baseBal);
+        emit Deposit(_acsVault, _baseBal);
     }
 
     function _withdrawSome(uint256 _amount) internal override returns (uint256) {
         uint256 pricePerFullShare = IACryptoSVault(acsVault).getPricePerFullShare();
         uint256 shareNeed = _amount.mul(1e18).div(pricePerFullShare);
 
-        (uint256 stakedVaultBalance, ) = IACryptoSFarm(acsFarm).userInfo(poolFarmId, address(this));
+        (uint256 stakedVaultBalance, , , ) = IACryptoSFarmV2(acsFarm).userInfo(acsVault, address(this));
         uint256 currentVaultBalance = IERC20(acsVault).balanceOf(address(this));
         uint256 totalVaultBalance = stakedVaultBalance.add(currentVaultBalance);
         if (shareNeed > totalVaultBalance) {
@@ -1579,7 +1579,7 @@ contract StrategyACSLp is StrategyBase {
 
         uint256 _before = IERC20(baseToken).balanceOf(address(this));
         if (shareNeed > currentVaultBalance) {
-            IACryptoSFarm(acsFarm).withdraw(poolFarmId, shareNeed.sub(currentVaultBalance));
+            IACryptoSFarmV2(acsFarm).withdraw(acsVault, shareNeed.sub(currentVaultBalance));
         }
         IACryptoSVault(acsVault).withdraw(shareNeed);
         uint256 _after = IERC20(baseToken).balanceOf(address(this));
@@ -1589,18 +1589,19 @@ contract StrategyACSLp is StrategyBase {
     }
 
     function _withdrawAll() internal override {
-        (uint256 stakedVaultBalance, ) = IACryptoSFarm(acsFarm).userInfo(poolFarmId, address(this));
+        (uint256 stakedVaultBalance, , , ) = IACryptoSFarmV2(acsFarm).userInfo(acsVault, address(this));
         if (stakedVaultBalance > 0) {
-            IACryptoSFarm(acsFarm).withdraw(poolFarmId, stakedVaultBalance);
+            IACryptoSFarmV2(acsFarm).withdraw(acsVault, stakedVaultBalance);
         }
-        IACryptoSVault(acsVault).withdrawAll();
+        stakedVaultBalance = IERC20(acsVault).balanceOf(address(this));
+        IACryptoSVault(acsVault).withdraw(stakedVaultBalance);
     }
 
     function claimReward() public override {
-        uint256 pendingReward = IACryptoSFarm(acsFarm).pendingSushi(poolFarmId, address(this));
-        uint256 withdrawalFee = IACryptoSFarm(acsFarm).withdrawalFee();
-        if (pendingReward > withdrawalFee.mul(rateToClaimReward)) {
-            IACryptoSFarm(acsFarm).deposit(poolFarmId, 0);
+        uint256 pendingReward = IACryptoSFarmV2(acsFarm).pendingSushi(acsVault, address(this));
+        uint256 harvestFee = IACryptoSFarmV2(acsFarm).harvestFee();
+        if (pendingReward > harvestFee.mul(rateToClaimReward).div(1000)) {
+            IACryptoSFarmV2(acsFarm).harvest(acsVault);
         }
     }
 
@@ -1643,7 +1644,7 @@ contract StrategyACSLp is StrategyBase {
 
     function balanceOfPool() public view override returns (uint256) {
         uint256 pricePerFullShare = IACryptoSVault(acsVault).getPricePerFullShare();
-        (uint256 vaultBalance, ) = IACryptoSFarm(acsFarm).userInfo(poolFarmId, address(this));
+        (uint256 vaultBalance, , , ) = IACryptoSFarmV2(acsFarm).userInfo(acsVault, address(this));
         vaultBalance = vaultBalance.add(IERC20(acsVault).balanceOf(address(this)));
         return vaultBalance.mul(pricePerFullShare).div(1e18);
     }
@@ -1652,12 +1653,12 @@ contract StrategyACSLp is StrategyBase {
         farmToken = new address[](1);
         totalDistributedValue = new uint256[](1);
         farmToken[0] = farmingToken;
-        totalDistributedValue[0] = IACryptoSFarm(acsFarm).pendingSushi(poolFarmId, address(this));
+        totalDistributedValue[0] = IACryptoSFarmV2(acsFarm).pendingSushi(acsVault, address(this));
     }
 
     function claimable_token() external view override returns (address farmToken, uint256 totalDistributedValue) {
         farmToken = farmingToken;
-        totalDistributedValue = IACryptoSFarm(acsFarm).pendingSushi(poolFarmId, address(this));
+        totalDistributedValue = IACryptoSFarmV2(acsFarm).pendingSushi(acsVault, address(this));
     }
 
     function getTargetFarm() external view override returns (address) {
@@ -1665,7 +1666,7 @@ contract StrategyACSLp is StrategyBase {
     }
 
     function getTargetPoolId() external view override returns (uint256) {
-        return poolFarmId;
+        return 0;
     }
 
     /**
@@ -1673,8 +1674,11 @@ contract StrategyACSLp is StrategyBase {
      * vault, ready to be migrated to the new strat.
      */
     function retireStrat() external onlyStrategist {
-        IACryptoSFarm(acsFarm).emergencyWithdraw(poolFarmId);
-        uint256 stakedVaultBalance = IERC20(acsVault).balanceOf(address(this));
+        (uint256 stakedVaultBalance, , , ) = IACryptoSFarmV2(acsFarm).userInfo(acsVault, address(this));
+        if (stakedVaultBalance > 0) {
+            IACryptoSFarmV2(acsFarm).withdraw(acsVault, stakedVaultBalance);
+        }
+        stakedVaultBalance = IERC20(acsVault).balanceOf(address(this));
         IACryptoSVault(acsVault).withdraw(stakedVaultBalance);
 
         uint256 baseBal = IERC20(baseToken).balanceOf(address(this));
@@ -1698,10 +1702,6 @@ contract StrategyACSLp is StrategyBase {
         IERC20(acsVault).safeApprove(acsFarm, type(uint256).max);
     }
 
-    function setPoolFarmId(uint256 _poolId) external onlyStrategist {
-        poolFarmId = _poolId;
-    }
-
     function setTokenLp(address _token0, address _token1) external onlyStrategist {
         token0 = _token0;
         token1 = _token1;
@@ -1714,11 +1714,6 @@ contract StrategyACSLp is StrategyBase {
             IERC20(token1).safeApprove(address(unirouter), type(uint256).max);
             IERC20(token1).safeApprove(address(vSwaprouter), type(uint256).max);
         }
-    }
-
-    function setFarmLimit(uint256 _farmLimit, uint256 _farmRate) external onlyStrategist {
-        farmLimit = _farmLimit;
-        farmRate = _farmRate;
     }
 
     function setRateToClaimReward(uint256 _rateToClaimReward) external onlyStrategist {
