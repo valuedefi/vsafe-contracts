@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at BscScan.com on 2021-03-03
-*/
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.6.12;
@@ -498,6 +494,65 @@ library SafeERC20 {
     }
 }
 
+/**
+ * @dev Contract module that helps prevent reentrant calls to a function.
+ *
+ * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
+ * available, which can be applied to functions to make sure there are no nested
+ * (reentrant) calls to them.
+ *
+ * Note that because there is a single `nonReentrant` guard, functions marked as
+ * `nonReentrant` may not call one another. This can be worked around by making
+ * those functions `private`, and then adding `external` `nonReentrant` entry
+ * points to them.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ */
+contract ReentrancyGuard {
+    // Booleans are more expensive than uint256 or any type that takes up a full
+    // word because each write operation emits an extra SLOAD to first read the
+    // slot's contents, replace the bits taken up by the boolean, and then write
+    // back. This is the compiler's defense against contract upgrades and
+    // pointer aliasing, and it cannot be disabled.
+
+    // The values being non-zero value makes deployment a bit more expensive,
+    // but in exchange the refund on every call to nonReentrant will be lower in
+    // amount. Since refunds are capped to a percentage of the total
+    // transaction's gas, it is best to keep them low in cases like this one, to
+    // increase the likelihood of the full refund coming into effect.
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    uint256 private _status;
+
+    constructor() internal {
+        _status = _NOT_ENTERED;
+    }
+
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and make it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+
+        // Any calls to nonReentrant after this point will fail
+        _status = _ENTERED;
+
+        _;
+
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _status = _NOT_ENTERED;
+    }
+}
+
 interface IUniswapV2Router {
     function factory() external pure returns (address);
 
@@ -756,6 +811,8 @@ interface IVSafeVault {
     function available() external view returns (uint256);
 
     function accept(address _input) external view returns (bool);
+
+    function openHarvest() external view returns (bool);
 
     function earn() external;
 
@@ -1077,10 +1134,134 @@ interface IValueLiquidRouter {
     ) external returns (uint256 amountETH);
 }
 
+interface IValueLiquidFormula {
+    function getReserveAndWeights(address pair, address tokenA)
+        external
+        view
+        returns (
+            address tokenB,
+            uint256 reserveA,
+            uint256 reserveB,
+            uint32 tokenWeightA,
+            uint32 tokenWeightB,
+            uint32 swapFee
+        );
+
+    function getFactoryReserveAndWeights(
+        address factory,
+        address pair,
+        address tokenA
+    )
+        external
+        view
+        returns (
+            address tokenB,
+            uint256 reserveA,
+            uint256 reserveB,
+            uint32 tokenWeightA,
+            uint32 tokenWeightB,
+            uint32 swapFee
+        );
+
+    function getAmountIn(
+        uint256 amountOut,
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint32 tokenWeightIn,
+        uint32 tokenWeightOut,
+        uint32 swapFee
+    ) external view returns (uint256 amountIn);
+
+    function getPairAmountIn(
+        address pair,
+        address tokenIn,
+        uint256 amountOut
+    ) external view returns (uint256 amountIn);
+
+    function getAmountOut(
+        uint256 amountIn,
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint32 tokenWeightIn,
+        uint32 tokenWeightOut,
+        uint32 swapFee
+    ) external view returns (uint256 amountOut);
+
+    function getPairAmountOut(
+        address pair,
+        address tokenIn,
+        uint256 amountIn
+    ) external view returns (uint256 amountOut);
+
+    function getAmountsIn(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountOut,
+        address[] calldata path
+    ) external view returns (uint256[] memory amounts);
+
+    function getFactoryAmountsIn(
+        address factory,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountOut,
+        address[] calldata path
+    ) external view returns (uint256[] memory amounts);
+
+    function getAmountsOut(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        address[] calldata path
+    ) external view returns (uint256[] memory amounts);
+
+    function getFactoryAmountsOut(
+        address factory,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        address[] calldata path
+    ) external view returns (uint256[] memory amounts);
+
+    function ensureConstantValue(
+        uint256 reserve0,
+        uint256 reserve1,
+        uint256 balance0Adjusted,
+        uint256 balance1Adjusted,
+        uint32 tokenWeight0
+    ) external view returns (bool);
+
+    function getReserves(
+        address pair,
+        address tokenA,
+        address tokenB
+    ) external view returns (uint256 reserveA, uint256 reserveB);
+
+    function getOtherToken(address pair, address tokenA) external view returns (address tokenB);
+
+    function quote(
+        uint256 amountA,
+        uint256 reserveA,
+        uint256 reserveB
+    ) external pure returns (uint256 amountB);
+
+    function sortTokens(address tokenA, address tokenB) external pure returns (address token0, address token1);
+
+    function mintLiquidityFee(
+        uint256 totalLiquidity,
+        uint112 reserve0,
+        uint112 reserve1,
+        uint32 tokenWeight0,
+        uint32 tokenWeight1,
+        uint112 collectedFee0,
+        uint112 collectedFee1
+    ) external view returns (uint256 amount);
+}
+
 interface IStrategy {
     event Deposit(address token, uint256 amount);
     event Withdraw(address token, uint256 amount, address to);
-    event Harvest(uint256 priceShareBefore, uint256 priceShareAfter, address compoundToken, uint256 compoundBalance, uint256 reserveFundAmount);
+    event Harvest(uint256 priceShareBefore, uint256 priceShareAfter, address compoundToken, uint256 compoundBalance, address profitToken, uint256 reserveFundAmount);
 
     function baseToken() external view returns (address);
 
@@ -1116,17 +1297,18 @@ interface IStrategy {
  Where possible, strategies must remain as immutable as possible, instead of updating variables, we update the contract by linking it in the controller
 
 */
-abstract contract StrategyBase is IStrategy {
+abstract contract StrategyBase is IStrategy, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Address for address;
     using SafeMath for uint256;
 
-    IUniswapV2Router public unirouter = IUniswapV2Router(0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F);
+    IUniswapV2Router public unirouter = IUniswapV2Router(0x10ED43C718714eb63d5aA57B78B54704E256024E);
     IValueLiquidRouter public vSwaprouter = IValueLiquidRouter(0xb7e19a1188776f32E8C2B790D9ca578F2896Da7C);
 
     address public override baseToken;
     address public farmingToken;
-    address public targetCompoundToken;
+    address public targetCompoundToken; // farmingToken -> compoundToken -> baseToken
+    address public targetProfitToken; // compoundToken -> profit
 
     address public governance;
     address public timelock = address(0x36fcf1c1525854b2d195F5d03d483f01549e06f2);
@@ -1144,15 +1326,19 @@ abstract contract StrategyBase is IStrategy {
     uint256 public lastHarvestTimeStamp;
     bool internal _initialized = false;
 
+    uint256 public slippageFactor = 950; // 5% default slippage tolerance
+
     function initialize(
         address _baseToken,
         address _farmingToken,
         address _controller,
-        address _targetCompoundToken
+        address _targetCompoundToken,
+        address _targetProfitToken
     ) internal {
         baseToken = _baseToken;
         farmingToken = _farmingToken;
         targetCompoundToken = _targetCompoundToken;
+        targetProfitToken = _targetProfitToken;
         controller = _controller;
         vault = IController(_controller).vault();
         require(address(vault) != address(0), "!vault");
@@ -1164,9 +1350,13 @@ abstract contract StrategyBase is IStrategy {
             IERC20(farmingToken).safeApprove(address(unirouter), type(uint256).max);
             IERC20(farmingToken).safeApprove(address(vSwaprouter), type(uint256).max);
         }
-        if (targetCompoundToken != farmingToken) {
+        if (targetCompoundToken != address(0) && targetCompoundToken != farmingToken) {
             IERC20(targetCompoundToken).safeApprove(address(unirouter), type(uint256).max);
             IERC20(targetCompoundToken).safeApprove(address(vSwaprouter), type(uint256).max);
+        }
+        if (targetProfitToken != address(0) && targetProfitToken != targetCompoundToken && targetProfitToken != farmingToken) {
+            IERC20(targetProfitToken).safeApprove(address(unirouter), type(uint256).max);
+            IERC20(targetProfitToken).safeApprove(address(vSwaprouter), type(uint256).max);
         }
     }
 
@@ -1196,19 +1386,45 @@ abstract contract StrategyBase is IStrategy {
     }
 
     function setUnirouter(IUniswapV2Router _unirouter) external onlyGovernance {
+        if (address(unirouter) != address(0)) {
+            if (farmingToken != address(0)) {
+                IERC20(farmingToken).safeApprove(address(unirouter), 0);
+            }
+            if (targetCompoundToken != address(0) && targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(unirouter), 0);
+            if (targetProfitToken != address(0) && targetProfitToken != targetCompoundToken && targetProfitToken != farmingToken) {
+                IERC20(targetProfitToken).safeApprove(address(unirouter), 0);
+            }
+        }
+
         unirouter = _unirouter;
         if (farmingToken != address(0)) {
             IERC20(farmingToken).safeApprove(address(unirouter), type(uint256).max);
         }
-        if (targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(unirouter), type(uint256).max);
+        if (targetCompoundToken != address(0) && targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(unirouter), type(uint256).max);
+        if (targetProfitToken != address(0) && targetProfitToken != targetCompoundToken && targetProfitToken != farmingToken) {
+            IERC20(targetProfitToken).safeApprove(address(unirouter), type(uint256).max);
+        }
     }
 
     function setVSwaprouter(IValueLiquidRouter _vSwaprouter) external onlyGovernance {
+        if (address(vSwaprouter) != address(0)) {
+            if (farmingToken != address(0)) {
+                IERC20(farmingToken).safeApprove(address(vSwaprouter), 0);
+            }
+            if (targetCompoundToken != address(0) && targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(vSwaprouter), 0);
+            if (targetProfitToken != address(0) && targetProfitToken != targetCompoundToken && targetProfitToken != farmingToken) {
+                IERC20(targetProfitToken).safeApprove(address(vSwaprouter), 0);
+            }
+        }
+
         vSwaprouter = _vSwaprouter;
         if (farmingToken != address(0)) {
             IERC20(farmingToken).safeApprove(address(vSwaprouter), type(uint256).max);
         }
-        if (targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(vSwaprouter), type(uint256).max);
+        if (targetCompoundToken != address(0) && targetCompoundToken != farmingToken) IERC20(targetCompoundToken).safeApprove(address(vSwaprouter), type(uint256).max);
+        if (targetProfitToken != address(0) && targetProfitToken != targetCompoundToken && targetProfitToken != farmingToken) {
+            IERC20(targetProfitToken).safeApprove(address(vSwaprouter), type(uint256).max);
+        }
     }
 
     function setUnirouterPath(
@@ -1260,6 +1476,15 @@ abstract contract StrategyBase is IStrategy {
 
     // Withdraw partial funds, normally used with a vault withdrawal
     function withdraw(uint256 _amount) external override onlyAuthorized returns (uint256) {
+        return _withdraw(_amount);
+    }
+
+    // For abi detection
+    function withdrawToVault(uint256 _amount) external onlyAuthorized returns (uint256) {
+        return _withdraw(_amount);
+    }
+
+    function _withdraw(uint256 _amount) internal returns (uint256) {
         uint256 _balance = IERC20(baseToken).balanceOf(address(this));
         if (_balance < _amount) {
             _amount = _withdrawSome(_amount.sub(_balance));
@@ -1287,12 +1512,16 @@ abstract contract StrategyBase is IStrategy {
         address _input,
         address _output,
         uint256 _amount
-    ) internal {
-        if (_input == _output) return;
+    ) internal virtual returns (uint256) {
+        if (_input == _output || _amount == 0) return _amount;
         address[] memory path = vSwapPairs[_input][_output];
+        uint256 before = IERC20(_output).balanceOf(address(this));
         if (path.length > 0) {
             // use vSwap
-            vSwaprouter.swapExactTokensForTokens(_input, _output, _amount, 1, path, address(this), now.add(1800));
+            uint256[] memory amounts = IValueLiquidFormula(vSwaprouter.formula()).getFactoryAmountsOut(vSwaprouter.factory(), _input, _output, _amount, path);
+            uint256 minAmountOut = amounts[amounts.length.sub(1)].mul(slippageFactor).div(1000);
+
+            vSwaprouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(_input, _output, _amount, minAmountOut, path, address(this), block.timestamp);
         } else {
             // use Uniswap
             path = uniswapPaths[_input][_output];
@@ -1302,8 +1531,12 @@ abstract contract StrategyBase is IStrategy {
                 path[0] = _input;
                 path[1] = _output;
             }
-            unirouter.swapExactTokensForTokens(_amount, 1, path, address(this), now.add(1800));
+            uint256[] memory amounts = unirouter.getAmountsOut(_amount, path);
+            uint256 minAmountOut = amounts[amounts.length.sub(1)].mul(slippageFactor).div(1000);
+
+            unirouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(_amount, minAmountOut, path, address(this), block.timestamp);
         }
+        return IERC20(_output).balanceOf(address(this)).sub(before);
     }
 
     function _buyWantAndReinvest() internal virtual;
@@ -1337,20 +1570,23 @@ abstract contract StrategyBase is IStrategy {
                 uint256 _gasFee = vaultMaster.gasFee();
 
                 uint256 _reserveFundAmount;
+                address _targetProfitToken = targetProfitToken;
                 if (_performanceFee > 0 && _reserveFund != address(0)) {
                     _reserveFundAmount = _targetCompoundBal.mul(_performanceFee).div(10000);
-                    IERC20(_targetCompoundToken).safeTransfer(_reserveFund, _reserveFundAmount);
+                    _reserveFundAmount = _swapTokens(_targetCompoundToken, _targetProfitToken, _reserveFundAmount);
+                    IERC20(_targetProfitToken).safeTransfer(_reserveFund, _reserveFundAmount);
                 }
 
                 if (_gasFee > 0 && _performanceReward != address(0)) {
                     uint256 _amount = _targetCompoundBal.mul(_gasFee).div(10000);
-                    IERC20(_targetCompoundToken).safeTransfer(_performanceReward, _amount);
+                    _amount = _swapTokens(_targetCompoundToken, _targetProfitToken, _amount);
+                    IERC20(_targetProfitToken).safeTransfer(_performanceReward, _amount);
                 }
 
                 _buyWantAndReinvest();
 
                 uint256 pricePerFullShareAfter = vault.getPricePerFullShare();
-                emit Harvest(pricePerFullShareBefore, pricePerFullShareAfter, _targetCompoundToken, _targetCompoundBal, _reserveFundAmount);
+                emit Harvest(pricePerFullShareBefore, pricePerFullShareAfter, _targetCompoundToken, _targetCompoundBal, _targetProfitToken, _reserveFundAmount);
             }
         }
 
@@ -1400,15 +1636,16 @@ abstract contract StrategyBase is IStrategy {
         strategist = _strategist;
     }
 
-    function setController(address _controller) external {
-        require(msg.sender == governance, "!governance");
+    function setController(address _controller) external onlyGovernance {
         controller = _controller;
         vault = IVSafeVault(IController(_controller).vault());
         require(address(vault) != address(0), "!vault");
         vaultMaster = IVaultMaster(vault.getVaultMaster());
+        baseToken = vault.token();
     }
 
     function setPerformanceFee(uint256 _performanceFee) public onlyGovernance {
+        require(_performanceFee < 10000, "performanceFee too high");
         performanceFee = _performanceFee;
     }
 
@@ -1420,9 +1657,18 @@ abstract contract StrategyBase is IStrategy {
         targetCompoundToken = _targetCompoundToken;
     }
 
+    function setTargetProfitToken(address _targetProfitToken) public onlyStrategist {
+        targetProfitToken = _targetProfitToken;
+    }
+
     function setApproveRouterForToken(address _token, uint256 _amount) public onlyStrategist {
         IERC20(_token).safeApprove(address(unirouter), _amount);
         IERC20(_token).safeApprove(address(vSwaprouter), _amount);
+    }
+
+    function setSlippageFactor(uint256 _slippageFactor) public onlyStrategist {
+        require(_slippageFactor <= 995, "slippage too high");
+        slippageFactor = _slippageFactor;
     }
 
     event ExecuteTransaction(address indexed target, uint256 value, string signature, bytes data);
@@ -1505,12 +1751,13 @@ contract StrategySushiLp is StrategyBase {
         address _farmPool,
         uint256 _poolId,
         address _targetCompound,
+        address _targetProfit,
         address _token0,
         address _token1,
         address _controller
-    ) public {
+    ) public nonReentrant {
         require(_initialized == false, "Strategy: Initialize must be false.");
-        initialize(_baseToken, _farmingToken, _controller, _targetCompound);
+        initialize(_baseToken, _farmingToken, _controller, _targetCompound, _targetProfit);
         farmPool = _farmPool;
         poolId = _poolId;
         token0 = _token0;
@@ -1532,7 +1779,7 @@ contract StrategySushiLp is StrategyBase {
         return "StrategySushiLp";
     }
 
-    function deposit() public override {
+    function deposit() public override nonReentrant {
         uint256 _baseBal = IERC20(baseToken).balanceOf(address(this));
         if (_baseBal > 0) {
             ICakeMasterChef(farmPool).deposit(poolId, _baseBal);
@@ -1582,7 +1829,7 @@ contract StrategySushiLp is StrategyBase {
         _addLiquidity();
         uint256 _after = IERC20(_baseToken).balanceOf(address(this));
         if (_after > 0) {
-            if (_after > _before) {
+            if (_after > _before && vaultMaster.isStrategy(address(this))) {
                 uint256 _compound = _after.sub(_before);
                 vault.addNewCompound(_compound, blocksToReleaseCompound);
             }
@@ -1596,7 +1843,10 @@ contract StrategySushiLp is StrategyBase {
         uint256 _amount0 = IERC20(_token0).balanceOf(address(this));
         uint256 _amount1 = IERC20(_token1).balanceOf(address(this));
         if (_amount0 > 0 && _amount1 > 0) {
-            IUniswapV2Router(unirouter).addLiquidity(_token0, _token1, _amount0, _amount1, 0, 0, address(this), block.timestamp + 1);
+            uint256 _amount0Min = _amount0.mul(slippageFactor).div(1000);
+            uint256 _amount1Min = _amount1.mul(slippageFactor).div(1000);
+            (, , uint256 liquidity) = unirouter.addLiquidity(_token0, _token1, _amount0, _amount1, _amount0Min, _amount1Min, address(this), block.timestamp);
+            require(liquidity > 0, "!liquidity");
         }
     }
 
@@ -1633,7 +1883,7 @@ contract StrategySushiLp is StrategyBase {
         ICakeMasterChef(farmPool).emergencyWithdraw(poolId);
 
         uint256 baseBal = IERC20(baseToken).balanceOf(address(this));
-        IERC20(baseToken).transfer(address(vault), baseBal);
+        IERC20(baseToken).safeTransfer(address(vault), baseBal);
     }
 
     function setBlocksToReleaseCompound(uint256 _blocks) external onlyStrategist {
@@ -1641,7 +1891,11 @@ contract StrategySushiLp is StrategyBase {
     }
 
     function setFarmPoolContract(address _farmPool) external onlyStrategist {
+        if (farmPool != address(0)) {
+            IERC20(baseToken).safeApprove(farmPool, 0);
+        }
         farmPool = _farmPool;
+        IERC20(baseToken).safeApprove(farmPool, type(uint256).max);
     }
 
     function setPoolId(uint256 _poolId) external onlyStrategist {
@@ -1649,6 +1903,18 @@ contract StrategySushiLp is StrategyBase {
     }
 
     function setTokenLp(address _token0, address _token1) external onlyStrategist {
+        if (token0 != address(0)) {
+            if (token0 != farmingToken && token0 != targetCompoundToken && token0 != targetProfitToken) {
+                IERC20(token0).safeApprove(address(unirouter), 0);
+                IERC20(token0).safeApprove(address(vSwaprouter), 0);
+            }
+        }
+        if (token1 != address(0)) {
+            if (token1 != farmingToken && token1 != targetCompoundToken && token1 != token0 && token1 != targetProfitToken) {
+                IERC20(token1).safeApprove(address(unirouter), 0);
+                IERC20(token1).safeApprove(address(vSwaprouter), 0);
+            }
+        }
         token0 = _token0;
         token1 = _token1;
 
