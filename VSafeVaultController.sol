@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at BscScan.com on 2021-03-03
-*/
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.6.12;
@@ -498,10 +494,69 @@ library SafeERC20 {
     }
 }
 
+/**
+ * @dev Contract module that helps prevent reentrant calls to a function.
+ *
+ * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
+ * available, which can be applied to functions to make sure there are no nested
+ * (reentrant) calls to them.
+ *
+ * Note that because there is a single `nonReentrant` guard, functions marked as
+ * `nonReentrant` may not call one another. This can be worked around by making
+ * those functions `private`, and then adding `external` `nonReentrant` entry
+ * points to them.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ */
+contract ReentrancyGuard {
+    // Booleans are more expensive than uint256 or any type that takes up a full
+    // word because each write operation emits an extra SLOAD to first read the
+    // slot's contents, replace the bits taken up by the boolean, and then write
+    // back. This is the compiler's defense against contract upgrades and
+    // pointer aliasing, and it cannot be disabled.
+
+    // The values being non-zero value makes deployment a bit more expensive,
+    // but in exchange the refund on every call to nonReentrant will be lower in
+    // amount. Since refunds are capped to a percentage of the total
+    // transaction's gas, it is best to keep them low in cases like this one, to
+    // increase the likelihood of the full refund coming into effect.
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    uint256 private _status;
+
+    constructor() internal {
+        _status = _NOT_ENTERED;
+    }
+
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and make it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+
+        // Any calls to nonReentrant after this point will fail
+        _status = _ENTERED;
+
+        _;
+
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _status = _NOT_ENTERED;
+    }
+}
+
 interface IStrategy {
     event Deposit(address token, uint256 amount);
     event Withdraw(address token, uint256 amount, address to);
-    event Harvest(uint256 priceShareBefore, uint256 priceShareAfter, address compoundToken, uint256 compoundBalance, uint256 reserveFundAmount);
+    event Harvest(uint256 priceShareBefore, uint256 priceShareAfter, address compoundToken, uint256 compoundBalance, address profitToken, uint256 reserveFundAmount);
 
     function baseToken() external view returns (address);
 
@@ -536,6 +591,8 @@ interface IVSafeVault {
     function available() external view returns (uint256);
 
     function accept(address _input) external view returns (bool);
+
+    function openHarvest() external view returns (bool);
 
     function earn() external;
 
@@ -610,7 +667,7 @@ interface IController {
     function withdrawFee(uint256) external view returns (uint256); // pJar: 0.5% (50/10000)
 }
 
-contract VSafeVaultController is IController {
+contract VSafeVaultController is IController, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Address for address;
     using SafeMath for uint256;
@@ -625,7 +682,7 @@ contract VSafeVaultController is IController {
     }
 
     IVSafeVault public override vault;
-    string public name = "VSafeVaultController:BTCBNB";
+    string public name = "VSafeVaultController";
 
     address public override want;
     uint256 public strategyLength;
@@ -641,13 +698,17 @@ contract VSafeVaultController is IController {
     uint256 public lastHarvestAllTimeStamp;
 
     uint256 public withdrawalFee = 0; // over 10000
+    bool internal _initialized = false;
 
-    constructor(IVSafeVault _vault) public {
+    function initialize(IVSafeVault _vault, string memory _name) public {
+        require(_initialized == false, "Strategy: Initialize must be false.");
         require(address(_vault) != address(0), "!_vault");
         vault = _vault;
         want = vault.token();
         governance = msg.sender;
         strategist = msg.sender;
+        name = _name;
+        _initialized = true;
     }
 
     modifier onlyGovernance() {
@@ -663,6 +724,12 @@ contract VSafeVaultController is IController {
     modifier onlyAuthorized() {
         require(msg.sender == address(vault) || msg.sender == strategist || msg.sender == governance, "!authorized");
         _;
+    }
+
+    function setVault(IVSafeVault _vault) external onlyGovernance {
+        require(address(_vault) != address(0), "!_vault");
+        vault = _vault;
+        want = vault.token();
     }
 
     function setName(string memory _name) external onlyGovernance {
@@ -686,6 +753,7 @@ contract VSafeVaultController is IController {
     }
 
     function setWithdrawalFee(uint256 _withdrawalFee) external onlyGovernance {
+        require(_withdrawalFee < 10000, "withdrawalFee too high");
         withdrawalFee = _withdrawalFee;
     }
 
@@ -793,7 +861,7 @@ contract VSafeVaultController is IController {
         IStrategy(_strategy).harvest(address(0));
     }
 
-    function harvestAllStrategies() external override onlyAuthorized {
+    function harvestAllStrategies() external override onlyAuthorized nonReentrant {
         address _bestStrategy = getBestStrategy(); // to send all harvested WETH and proceed the profit sharing all-in-one here
         for (uint256 _sid = 0; _sid < strategyLength; _sid++) {
             address _strategy = strategies[_sid].strategy;
