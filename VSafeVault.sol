@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at BscScan.com on 2021-03-03
-*/
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.6.12;
@@ -827,6 +823,8 @@ interface IVSafeVault {
 
     function accept(address _input) external view returns (bool);
 
+    function openHarvest() external view returns (bool);
+
     function earn() external;
 
     function harvest(address reserve, uint256 amount) external;
@@ -898,13 +896,13 @@ interface IController {
     function getStrategyCount() external view returns (uint256);
 
     function strategies(uint256 _stratId)
-    external
-    view
-    returns (
-        address _strategy,
-        uint256 _quota,
-        uint256 _percent
-    );
+        external
+        view
+        returns (
+            address _strategy,
+            uint256 _quota,
+            uint256 _percent
+        );
 
     function getBestStrategy() external view returns (address _strategy);
 
@@ -937,6 +935,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
     using Address for address;
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
+    uint256 public constant BONE = 10**18;
 
     IERC20 public basedToken;
 
@@ -961,8 +960,11 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
     uint256 public startReleasingCompoundBlk;
     uint256 public endReleasingCompoundBlk;
 
-    bool public openHarvest = true;
+    bool public override openHarvest = true;
     uint256 public lastHarvestAllTimeStamp;
+
+    bool public depositPaused;
+    bool public withdrawPaused;
 
     // name: VSafeVault:VSwapGvValueBUSD
     //symbol: vSafeGvValueBUSD
@@ -985,7 +987,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
      */
     modifier checkContract(address _account) {
         if (!acceptContractDepositor && !whitelistedContract[_account] && (_account != vaultMaster.bank(address(this)))) {
-            require(!address(_account).isContract() && _account == tx.origin, "contract not support");
+            require(_account == tx.origin, "contract not support");
         }
         _;
     }
@@ -997,19 +999,29 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         _mutex = false;
     }
 
-    function setAcceptContractDepositor(bool _acceptContractDepositor) external {
+    modifier onlyGovernance() {
         require(msg.sender == governance, "!governance");
+        _;
+    }
+
+    function setAcceptContractDepositor(bool _acceptContractDepositor) external onlyGovernance {
         acceptContractDepositor = _acceptContractDepositor;
     }
 
-    function whitelistContract(address _contract) external {
-        require(msg.sender == governance, "!governance");
+    function whitelistContract(address _contract) external onlyGovernance {
         whitelistedContract[_contract] = true;
     }
 
-    function unwhitelistContract(address _contract) external {
-        require(msg.sender == governance, "!governance");
+    function unwhitelistContract(address _contract) external onlyGovernance {
         whitelistedContract[_contract] = false;
+    }
+
+    function setPauseDeposit(bool _depositPaused) external onlyGovernance {
+        depositPaused = _depositPaused;
+    }
+
+    function setPauseWithdraw(bool _withdrawPaused) external onlyGovernance {
+        withdrawPaused = _withdrawPaused;
     }
 
     function cap() external view override returns (uint256) {
@@ -1046,39 +1058,32 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         _balance = basedToken.balanceOf(address(this)).add(IController(controller).balanceOf()).sub(pendingCompound());
     }
 
-    function setGovernance(address _governance) external {
-        require(msg.sender == governance, "!governance");
+    function setGovernance(address _governance) external onlyGovernance {
         governance = _governance;
     }
 
-    function setController(address _controller) external {
-        require(msg.sender == governance, "!governance");
+    function setController(address _controller) external onlyGovernance {
         require(IController(_controller).want() == address(basedToken), "!token");
         controller = _controller;
     }
 
-    function setConverterMap(address _token, address _converter) external {
-        require(msg.sender == governance, "!governance");
+    function setConverterMap(address _token, address _converter) external onlyGovernance {
         converterMap[_token] = _converter;
     }
 
-    function setVaultMaster(IVaultMaster _vaultMaster) external {
-        require(msg.sender == governance, "!governance");
+    function setVaultMaster(IVaultMaster _vaultMaster) external onlyGovernance {
         vaultMaster = _vaultMaster;
     }
 
-    function setEarnLowerlimit(uint256 _earnLowerlimit) external {
-        require(msg.sender == governance, "!governance");
+    function setEarnLowerlimit(uint256 _earnLowerlimit) external onlyGovernance {
         earnLowerlimit = _earnLowerlimit;
     }
 
-    function setCap(uint256 _cap) external {
-        require(msg.sender == governance, "!governance");
+    function setCap(uint256 _cap) external onlyGovernance {
         totalDepositCap = _cap;
     }
 
-    function setDepositLimit(uint256 _limit) external {
-        require(msg.sender == governance, "!governance");
+    function setDepositLimit(uint256 _limit) external onlyGovernance {
         depositLimit = _limit;
     }
 
@@ -1106,8 +1111,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
     }
 
     // Only allows to earn some extra yield from non-core tokens
-    function earnExtra(address _token) external {
-        require(msg.sender == governance, "!governance");
+    function earnExtra(address _token) external onlyGovernance {
         require(converterMap[_token] != address(0), "!converter");
         require(address(_token) != address(basedToken), "token");
         require(address(_token) != address(this), "share");
@@ -1122,7 +1126,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
     }
 
     function calc_token_amount_deposit(uint256 _amount) external view override returns (uint256) {
-        return _amount.mul(1e18).div(getPricePerFullShare());
+        return _amount.mul(BONE).div(getPricePerFullShare());
     }
 
     function calc_token_amount_withdraw(uint256 _shares) external view override returns (uint256) {
@@ -1144,6 +1148,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         uint256 _amount,
         uint256 _min_mint_amount
     ) public override checkContract(_account) _non_reentrant_ returns (uint256 _mint_amount) {
+        require(!depositPaused, "deposit paused");
         if (controller != address(0)) {
             IController(controller).beforeDeposit();
         }
@@ -1178,7 +1183,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
     }
 
     // Used to swap any borrowed reserve over the debt limit to liquidate to 'token'
-    function harvest(address reserve, uint256 amount) external override {
+    function harvest(address reserve, uint256 amount) external override _non_reentrant_ {
         require(msg.sender == controller, "!controller");
         require(reserve != address(basedToken), "basedToken");
         IERC20(reserve).safeTransfer(controller, amount);
@@ -1191,7 +1196,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         IController(controller).harvestStrategy(_strategy);
     }
 
-    function harvestAllStrategies() external override {
+    function harvestAllStrategies() external override _non_reentrant_ {
         if (!openHarvest) {
             require(msg.sender == governance || msg.sender == vaultMaster.bank(address(this)), "!governance && !bank");
         }
@@ -1209,6 +1214,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         uint256 _shares,
         uint256 _min_output_amount
     ) public override _non_reentrant_ returns (uint256 _output_amount) {
+        require(!withdrawPaused, "withdraw paused");
         // Check that no mint has been made in the same block from the same EOA
         require(keccak256(abi.encodePacked(tx.origin, block.number)) != _minterBlock, "REENTR MINT-BURN");
 
@@ -1240,13 +1246,12 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         basedToken.safeTransfer(_account, _output_amount);
     }
 
-    function setOpenHarvest(bool _openHarvest) external {
-        require(msg.sender == governance, "!governance");
+    function setOpenHarvest(bool _openHarvest) external onlyGovernance {
         openHarvest = _openHarvest;
     }
 
     function getPricePerFullShare() public view override returns (uint256) {
-        return (totalSupply() == 0) ? 1e18 : balance().mul(1e18).div(totalSupply());
+        return (totalSupply() == 0) ? BONE : balance().mul(BONE).div(totalSupply());
     }
 
     /**
@@ -1257,15 +1262,14 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         IERC20 _token,
         uint256 amount,
         address to
-    ) external {
-        require(msg.sender == governance, "!governance");
+    ) external onlyGovernance {
         require(address(_token) != address(basedToken), "token");
         require(address(_token) != address(this), "share");
         _token.safeTransfer(to, amount);
     }
 }
 
-contract VSafeVaultPancakeBTCBNB is VSafeVaultBase {
+contract VSafeVault is VSafeVaultBase {
     event ExecuteTransaction(address indexed target, uint256 value, string signature, bytes data);
 
     /**
@@ -1277,7 +1281,7 @@ contract VSafeVaultPancakeBTCBNB is VSafeVaultBase {
         uint256 value,
         string memory signature,
         bytes memory data
-    ) public returns (bytes memory) {
+    ) public _non_reentrant_ returns (bytes memory) {
         require(msg.sender == governance, "!governance");
 
         bytes memory callData;
