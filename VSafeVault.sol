@@ -1189,7 +1189,7 @@ abstract contract VSafeVaultBase is ERC20UpgradeSafe, IVSafeVault {
         IERC20(reserve).safeTransfer(controller, amount);
     }
 
-    function harvestStrategy(address _strategy) external override {
+    function harvestStrategy(address _strategy) external override _non_reentrant_ {
         if (!openHarvest) {
             require(msg.sender == governance || msg.sender == vaultMaster.bank(address(this)), "!governance && !bank");
         }
