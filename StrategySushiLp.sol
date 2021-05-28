@@ -494,6 +494,94 @@ library SafeERC20 {
     }
 }
 
+interface IUniswapV2Pair {
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    function name() external pure returns (string memory);
+
+    function symbol() external pure returns (string memory);
+
+    function decimals() external pure returns (uint8);
+
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address owner) external view returns (uint256);
+
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    function approve(address spender, uint256 value) external returns (bool);
+
+    function transfer(address to, uint256 value) external returns (bool);
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external returns (bool);
+
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+
+    function PERMIT_TYPEHASH() external pure returns (bytes32);
+
+    function nonces(address owner) external view returns (uint256);
+
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+
+    event Mint(address indexed sender, uint256 amount0, uint256 amount1);
+    event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
+    event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
+    event Sync(uint112 reserve0, uint112 reserve1);
+
+    function MINIMUM_LIQUIDITY() external pure returns (uint256);
+
+    function factory() external view returns (address);
+
+    function token0() external view returns (address);
+
+    function token1() external view returns (address);
+
+    function getReserves()
+        external
+        view
+        returns (
+            uint112 reserve0,
+            uint112 reserve1,
+            uint32 blockTimestampLast
+        );
+
+    function price0CumulativeLast() external view returns (uint256);
+
+    function price1CumulativeLast() external view returns (uint256);
+
+    function kLast() external view returns (uint256);
+
+    function mint(address to) external returns (uint256 liquidity);
+
+    function burn(address to) external returns (uint256 amount0, uint256 amount1);
+
+    function swap(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        address to,
+        bytes calldata data
+    ) external;
+
+    function skim(address to) external;
+
+    function sync() external;
+
+    function initialize(address, address) external;
+}
+
 /**
  * @dev Contract module that helps prevent reentrant calls to a function.
  *
@@ -1541,7 +1629,7 @@ abstract contract StrategyBase is IStrategy, ReentrancyGuard {
 
     function _buyWantAndReinvest() internal virtual;
 
-    function harvest(address _mergedStrategy) external virtual override {
+    function harvest(address _mergedStrategy) external virtual override nonReentrant {
         require(msg.sender == controller || msg.sender == strategist || msg.sender == governance, "!authorized");
 
         uint256 pricePerFullShareBefore = vault.getPricePerFullShare();
@@ -1843,8 +1931,19 @@ contract StrategySushiLp is StrategyBase {
         uint256 _amount0 = IERC20(_token0).balanceOf(address(this));
         uint256 _amount1 = IERC20(_token1).balanceOf(address(this));
         if (_amount0 > 0 && _amount1 > 0) {
-            uint256 _amount0Min = _amount0.mul(slippageFactor).div(1000);
-            uint256 _amount1Min = _amount1.mul(slippageFactor).div(1000);
+            uint256 _amount0Min = 1;
+            uint256 _amount1Min = 1;
+            {
+                (uint256 _reserve0, uint256 _reserve1, ) = IUniswapV2Pair(baseToken).getReserves();
+                uint256 _amount1Optimal = _amount0.mul(_reserve1) / _reserve0;
+                if (_amount1Optimal <= _amount1) {
+                    _amount1Min = _amount1Optimal.mul(slippageFactor).div(1000);
+                } else {
+                    uint256 _amount0Optimal = _amount1.mul(_reserve0) / _reserve1;
+                    _amount0Min = _amount0Optimal.mul(slippageFactor).div(1000);
+                }
+            }
+
             (, , uint256 liquidity) = unirouter.addLiquidity(_token0, _token1, _amount0, _amount1, _amount0Min, _amount1Min, address(this), block.timestamp);
             require(liquidity > 0, "!liquidity");
         }
